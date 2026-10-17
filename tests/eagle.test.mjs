@@ -1,0 +1,14 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import {exportNodes,eagleConfig,syncExportNodes,applyExportInputs,promptAnnotation,promptTags,sameConnection} from '../web/eagle.js';
+const kinds=['EagleAssetExport','EagleVideoExport','EagleAudioExport','EagleModelExport'];
+function fixture(){const nodes=kinds.map((type,index)=>({id:index+10,type,widgets:[{name:'settings',value:JSON.stringify({host:'http://local',token:'preserve',tags:'manual',annotation:'original',custom:42})},{name:'filename_prefix',value:'native/path'}],inputs:[{name:'annotation',link:123}]}));const graph={_nodes:nodes,getNodeById:id=>nodes.find(node=>String(node.id)===String(id)),change(){}};const group={nodes};const row={prompts:[{text_node_id:'1',prompt:'one, tag'},{text_node_id:'2',prompt:'two\nline'},{text_node_id:'3',prompt:'three, tag'}]};return{nodes,graph,group,row};}
+test('all four Eagle exports receive controls and optional metadata without changing native links',()=>{
+ const {nodes,graph,group,row}=fixture();assert.equal(exportNodes(graph,group).length,4);eagleConfig(row,nodes);Object.assign(row.eagle,{folder_id:'folder',folder_label:'目标',library_key:'library',save_eagle:true,save_output:true,filename_prefix:'output/example',annotation:true,tags:true});
+ syncExportNodes(graph,group,row);assert.equal(sameConnection(nodes),true);const output=Object.fromEntries(nodes.map(node=>[String(node.id),{class_type:node.type,inputs:{settings:node.widgets[0].value,annotation:['other',0],tags:['other',0]}}]));
+ applyExportInputs(output,graph,group,row);
+ for(const node of nodes){const target=output[node.id],state=JSON.parse(target.inputs.settings);assert.equal(state.token,'preserve');assert.equal(state.custom,42);assert.equal(state.save_output,true);assert.equal(state.folder_id,'folder');assert.equal(target.inputs.filename_prefix,'output/example');assert.equal(target.inputs.annotation,'one, tag\n\n第二文本框内容\ntwo\nline\n\n第三文本框内容\nthree, tag');assert.deepEqual(JSON.parse(target.inputs.tags),['one','tag','two','line','three']);assert.equal(node.inputs[0].link,123);assert.equal(JSON.parse(node.widgets[0].value).annotation,'original');}
+ row.eagle.annotation=false;row.eagle.tags=false;const untouched={10:{class_type:kinds[0],inputs:{settings:nodes[0].widgets[0].value,annotation:['native',0],tags:['native',1]}}};applyExportInputs(untouched,graph,group,row);assert.deepEqual(untouched[10].inputs.annotation,['native',0]);assert.deepEqual(untouched[10].inputs.tags,['native',1]);
+});
+test('annotation and tag merging handle empty text and more than ten blocks',()=>{
+ const row={prompts:Array.from({length:12},(_,index)=>({text_node_id:String(index),prompt:index===0?'':String(index)}))};assert.match(promptAnnotation(row),/第十二文本框内容\n11$/);assert.deepEqual(JSON.parse(promptTags({prompts:[]})),[]);
+});

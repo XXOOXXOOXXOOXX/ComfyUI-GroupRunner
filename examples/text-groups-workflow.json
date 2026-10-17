@@ -1,0 +1,96 @@
+{
+  "version": 0.4,
+  "last_node_id": 2,
+  "last_link_id": 0,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "GroupRunnerText",
+      "pos": [
+        65,
+        100
+      ],
+      "size": [
+        550,
+        150
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "text",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "GroupRunnerText"
+      },
+      "widgets_values": [
+        "一个角色的正面、侧面、背面设定图，身份和服装保持一致。"
+      ]
+    },
+    {
+      "id": 2,
+      "type": "GroupRunnerText",
+      "pos": [
+        745,
+        100
+      ],
+      "size": [
+        550,
+        150
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "text",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "GroupRunnerText"
+      },
+      "widgets_values": [
+        "清晨的安静街道，柔和自然光，细致的环境与建筑。"
+      ]
+    }
+  ],
+  "links": [],
+  "groups": [
+    {
+      "id": 1,
+      "title": "角色提示词",
+      "bounding": [
+        40,
+        45,
+        610,
+        245
+      ],
+      "color": "#3f789e",
+      "font_size": 24,
+      "flags": {}
+    },
+    {
+      "id": 2,
+      "title": "场景提示词",
+      "bounding": [
+        720,
+        45,
+        610,
+        245
+      ],
+      "color": "#3f789e",
+      "font_size": 24,
+      "flags": {}
+    }
+  ],
+  "config": {},
+  "extra": {}
+}

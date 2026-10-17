@@ -1,0 +1,9 @@
+[project]
+name = "comfyui-group-runner"
+version = "1.2.1"
+description = "Floating group runner with per-workflow bindings, prompt editing, sequential batches and targeted cancellation"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+
+[tool.comfy]
+DisplayName = "框运行 · Group Runner"
