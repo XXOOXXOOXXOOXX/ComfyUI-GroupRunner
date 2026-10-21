@@ -15,7 +15,7 @@ def identifier(value):
 
 
 def validate_config(data):
-    if not isinstance(data, dict) or data.get("version") not in (1, 2, 3):
+    if not isinstance(data, dict) or data.get("version") not in (1, 2, 3, 4):
         raise ValueError("配置格式无效。")
     workflow = data.get("workflow", {})
     if not isinstance(workflow, dict) or any(not isinstance(workflow.get(key), str) or len(workflow[key]) > 2000 for key in ("identity", "name")):
@@ -48,6 +48,9 @@ def validate_config(data):
                 node_ids.add(node_id)
                 if not isinstance(entry.get("prompt"), str) or len(entry["prompt"]) > 50000:
                     raise ValueError("每个提示词最多 50000 字符。")
+                if "variants" in entry and (not isinstance(entry["variants"], list) or not 1 <= len(entry["variants"]) <= 1000
+                                            or any(not isinstance(value, str) or len(value) > 50000 for value in entry["variants"])):
+                    raise ValueError("批量提示词需要 1–1000 个文本框，每框最多 50000 字符。")
         elif not isinstance(row.get("prompt"), str) or len(row["prompt"]) > 50000:
             raise ValueError("每个提示词最多 50000 字符。")
         if row.get("group") is not None and not isinstance(row["group"], dict):

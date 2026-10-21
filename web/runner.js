@@ -1,4 +1,4 @@
-import { uid, resolveGroup, buildPlan, graphNodes, workflowInfo, textNodes, rowPrompts } from "./model.js";
+import { uid, resolveGroup, buildPlan, graphNodes, workflowInfo, textNodes, rowPrompts, rowVariantCount, variantRow } from "./model.js";
 import {syncExportNodes,applyExportInputs,exportNodes,sameConnection} from "./eagle.js";
 const delay = ms => new Promise(resolve=>setTimeout(resolve,ms));
 export class GroupQueue {
@@ -14,11 +14,12 @@ export class GroupQueue {
             if(!Number.isInteger(row.count)||row.count<1||row.count>1000)throw new Error("每行次数必须为 1–1000。");
             if(row.eagle?.save_eagle&&exportNodes(info.graph,resolveGroup(info.graph,row.group)).length&&!row.eagle.folder_id)throw new Error("保存到 Eagle 已开启，请先选择 Eagle 目录。");
         }
-        for(const row of selected)this.jobs.push({id:uid(),row:structuredClone(row),graph:info.graph,identity:info.identity,state:"queued",done:0,message:"等待执行",cancelled:false});
-        const wanted=new Set(rows.map(row=>row.id));for(const job of this.jobs)if(wanted.has(job.row.id)&&job.identity===info.identity){job.suspended=false;if(job.state==="paused"){job.state="queued";job.message="等待继续";}}
+        for(const row of selected)this.jobs.push({id:uid(),row:structuredClone(row),sourceRow:row,total:row.count*rowVariantCount(row),graph:info.graph,identity:info.identity,state:"queued",done:0,message:"等待执行",cancelled:false});
+        const wanted=new Map(rows.map(row=>[row.id,row]));for(const job of this.jobs)if(wanted.has(job.row.id)&&job.identity===info.identity){job.sourceRow=wanted.get(job.row.id);job.suspended=false;if(job.state==="paused"){job.state="queued";job.message="等待继续";}}
         this.paused=false;
         this.onChange(); this.pump();
     }
+    updateDraft(row){const job=this.jobFor(row.id);if(job){job.sourceRow=row;job.total=job.row.count*rowVariantCount(row);this.onChange();}}
     pause(message="已暂停后续批次") {
         this.paused=true;
         for(const job of this.jobs)if(["queued","running","submitting"].includes(job.state)){job.suspended=true;if(job.state==="queued"){job.state="paused";job.message=message;}}
@@ -35,30 +36,29 @@ export class GroupQueue {
         const info=workflowInfo(this.app);
         if(info.graph!==job.graph||info.identity!==job.identity||!this.isActive()){job.suspended=true;return null;}
         const group=resolveGroup(job.graph,job.row.group);if(!group)throw new Error("分组已删除或无法匹配，请重新选择。");
-        const prompts=rowPrompts(job.row),available=new Map(textNodes(job.graph,group).map(node=>[String(node.id),node]));
+        const style=Math.floor(job.done/job.row.count),run=variantRow(structuredClone(job.sourceRow||job.row),style);
+        job.total=job.row.count*rowVariantCount(job.sourceRow||job.row);
+        const prompts=rowPrompts(run),available=new Map(textNodes(job.graph,group).map(node=>[String(node.id),node]));
         if(prompts.some(entry=>!available.has(String(entry.text_node_id))))throw new Error("所选文本节点已不在这个分组，请刷新后重新运行。");
-        for(const entry of prompts) {
-            const chosen=available.get(String(entry.text_node_id)),widget=chosen.widgets?.find(widget=>widget.name==="text");
-            if(widget){widget.value=entry.prompt;if(widget.inputEl)widget.inputEl.value=entry.prompt;}
-        }
+        const applyPrompts=output=>{for(const entry of prompts){const target=output[String(entry.text_node_id)];if(target?.class_type==="GroupRunnerText")target.inputs.text=entry.prompt;}};
         if(job.row.eagle?.save_eagle&&!sameConnection(exportNodes(job.graph,group)))throw new Error("同组 Eagle 导出节点的连接不同，请先统一 Eagle 地址和 Token。");
-        syncExportNodes(job.graph,group,job.row);
+        syncExportNodes(job.graph,group,run);
         let data=await this.app.graphToPrompt(job.graph);
         if(job.cancelled)return null;
         const serializedInfo=workflowInfo(this.app);
         if(serializedInfo.graph!==job.graph||serializedInfo.identity!==job.identity||this.paused||job.suspended||!this.isActive()){job.suspended=true;return null;}
-        applyExportInputs(data.output,job.graph,group,job.row);
+        applyPrompts(data.output);applyExportInputs(data.output,job.graph,group,run);
         let plan=buildPlan(data.output,job.graph,group,this.nodeDefs);
         const nodes=graphNodes(job.graph).filter(node=>plan.nodeIds.includes(String(node.id)));
         for(const node of nodes)for(const widget of node.widgets||[])widget.beforeQueued?.({isPartialExecution:true});
         // Native seed controls may update a widget in beforeQueued.
-        data=await this.app.graphToPrompt(job.graph);applyExportInputs(data.output,job.graph,group,job.row);plan=buildPlan(data.output,job.graph,group,this.nodeDefs);
+        data=await this.app.graphToPrompt(job.graph);applyPrompts(data.output);applyExportInputs(data.output,job.graph,group,run);plan=buildPlan(data.output,job.graph,group,this.nodeDefs);
         const now=workflowInfo(this.app);
         if(job.cancelled)return null;
         if(now.graph!==job.graph||now.identity!==job.identity||this.paused||job.suspended||!this.isActive()){job.suspended=true;return null;}
-        applyExportInputs(plan.output,job.graph,group,job.row);
-        const workflow=structuredClone(data.workflow);workflow.extra||={};workflow.extra.group_runner_run={session:this.session,job:job.id,row:job.row.id};
-        job.state="submitting";job.message=`提交 ${job.done+1} / ${job.row.count}`;this.onChange();
+        applyExportInputs(plan.output,job.graph,group,run);
+        const workflow=structuredClone(data.workflow);workflow.extra||={};workflow.extra.group_runner_run={session:this.session,job:job.id,row:job.row.id,variant:style+1};
+        job.state="submitting";job.message=`提交 ${job.done+1} / ${job.total} · 提示词 ${style+1}`;this.onChange();
         const response=await this.api.queuePrompt(0,{output:plan.output,workflow},{partialExecutionTargets:plan.targets});
         if(!response?.prompt_id)throw new Error("ComfyUI 没有返回任务编号。");
         job.prompt_id=response.prompt_id;
@@ -90,12 +90,12 @@ export class GroupQueue {
             while(!this.paused&&this.isActive()) {
                 const job=this.jobs.find(job=>job.state==="queued");if(!job)break;this.current=job;
                 try {
-                    while(job.done<job.row.count&&!job.cancelled&&!job.suspended&&!this.paused&&this.isActive()) {
+                    while(job.done<job.row.count*rowVariantCount(job.sourceRow||job.row)&&!job.cancelled&&!job.suspended&&!this.paused&&this.isActive()) {
                         const id=await this.submit(job);if(!id)break;
-                        job.state="running";job.message=`执行 ${job.done+1} / ${job.row.count}`;this.onChange();
+                        job.state="running";job.message=`执行 ${job.done+1} / ${job.total} · 提示词 ${Math.floor(job.done/job.row.count)+1}`;this.onChange();
                         await this.completion(job,id);if(!job.cancelled)job.done++;this.onChange();
                     }
-                    if(!job.cancelled){job.state=job.done===job.row.count?"done":"paused";job.message=job.state==="done"?"已完成":"已暂停后续批次";}
+                    if(!job.cancelled){job.total=job.row.count*rowVariantCount(job.sourceRow||job.row);job.state=job.done>=job.total?"done":"paused";job.message=job.state==="done"?"已完成":"已暂停后续批次";}
                 }catch(error){if(!job.cancelled){job.state="error";job.message=error.message;}}
                 this.current=null;this.onChange();
             }

@@ -41,7 +41,7 @@ const ready=new Promise((resolve,reject)=>{let output='';const timer=setTimeout(
  assert.ok(layout.buttons.every(height=>height<=28),'controls have compact vertical padding');assert.ok(layout.field.h<=30);assert.equal(layout.overflow,false);
  for(const label of ['保存当前工作流绑定','删除当前工作流绑定','刷新分组及工作流绑定']){const control=panel.getByRole('button',{name:label,exact:true});assert.equal(await control.locator('svg').count(),1);assert.equal(await control.innerText(),'');}
  await panel.getByRole('button',{name:'保存当前工作流绑定',exact:true}).click();await page.waitForFunction(()=>!GroupRunnerUI.saving);
- let saved=await(await fetch(host+'/group_runner/bindings')).json();assert.equal(saved.bindings[key].version,3);assert.deepEqual(saved.bindings[key].rows[0].prompts.map(entry=>entry.text_node_id),['6','1','7']);
+ let saved=await(await fetch(host+'/group_runner/bindings')).json();assert.equal(saved.bindings[key].version,4);assert.deepEqual(saved.bindings[key].rows[0].prompts.map(entry=>entry.text_node_id),['6','1','7']);
  // The queue must write every saved draft even after a native node value changes.
  await page.evaluate(()=>{for(const node of fixtureApp.graph._nodes)if(node.type==='GroupRunnerText')node.widgets[0].value='external change'});
  await panel.getByRole('button',{name:'运行第 1 行',exact:true}).click();await page.waitForFunction(()=>GroupRunnerUI.runner.jobs[0]?.state==='done',{},{timeout:15000});

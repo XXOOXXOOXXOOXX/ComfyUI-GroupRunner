@@ -1,7 +1,7 @@
 class GroupRunnerText:
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {"text": ("STRING", {"multiline": True, "default": "", "tooltip": "可从框运行浮窗中编辑；连接至任何 STRING 提示词接口。"})}}
+        return {"required": {"text": ("STRING", {"multiline": True, "default": "", "tooltip": "连接 STRING 提示词接口；在框运行浮窗双击提示词可设置多条批量运行。普通队列输出第一条。"})}}
 
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("text",)

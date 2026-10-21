@@ -1,5 +1,13 @@
 import test from 'node:test';import assert from 'node:assert/strict';
-import {buildPlan,groupRef,resolveGroup,workflowInfo,syncPrompts,rowPrompts} from '../web/model.js';
+import {buildPlan,groupRef,resolveGroup,workflowInfo,syncPrompts,rowPrompts,promptValues,rowVariantCount,variantRow} from '../web/model.js';
+
+test('batch drafts ignore blank fields and pair text nodes in order without a Cartesian expansion',()=>{
+ const row={count:2,prompts:[{text_node_id:'1',prompt:'first',variants:['北欧','  ','中古','现代']},{text_node_id:'2',prompt:'固定相机'},{text_node_id:'3',prompt:'a',variants:['上午','傍晚']}]};
+ assert.deepEqual(promptValues(row.prompts[0]),['北欧','中古','现代']);assert.equal(rowVariantCount(row),3);
+ assert.deepEqual(variantRow(row,2).prompts.map(entry=>entry.prompt),['现代','固定相机','傍晚']);
+ assert.equal(row.prompts[0].variants[1],'  ');
+ const node={id:1,widgets:[{name:'text',value:'native'}]};syncPrompts(row,[node]);assert.deepEqual(row.prompts[0].variants,['北欧','  ','中古','现代']);
+});
 function fixture(){
  const nodes=[{id:1,type:'GroupRunnerText',outputs:[{type:'STRING'}]},{id:2,type:'Echo',outputs:[{type:'STRING'}]},{id:3,type:'Save',outputs:[]},{id:4,type:'Save',outputs:[]}];
  const group={id:10,title:'A',_bounding:[0,0,100,100],nodes:[nodes[1],nodes[2]]};const graph={_nodes:nodes,_groups:[group],getNodeById:id=>nodes.find(node=>String(node.id)===String(id))};
@@ -8,6 +16,12 @@ function fixture(){
 test('group execution keeps needed upstream dependencies and excludes unrelated output branches',()=>{
  const {graph,group,output}=fixture();const plan=buildPlan(output,graph,group,{Echo:{output:['STRING']},Save:{output_node:true,output:[]}});
  assert.deepEqual(new Set(Object.keys(plan.output)),new Set(['1','2','3']));assert.deepEqual(plan.targets,['3']);assert.equal(output['4'].inputs.text,'unrelated');
+});
+
+test('a freshly restored group uses geometry until native membership is recomputed',()=>{
+ const {graph,group,nodes}=fixture();group.nodes=new Set();group._bounding=[0,0,100,100];
+ nodes.forEach((node,index)=>{node.pos=[index===0?10:500,10];node.size=[30,30];});
+ assert.deepEqual(groupRef(graph,group).members,['1']);
 });
 test('non-output terminal gets an execution-only sink without mutating workflow nodes',()=>{
  const {graph,group,output}=fixture();group.nodes=[graph.getNodeById(2)];const plan=buildPlan(output,graph,group,{Echo:{output:['STRING']}});

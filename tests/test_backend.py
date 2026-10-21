@@ -16,6 +16,15 @@ def load(name, path):
 
 
 class BackendTests(unittest.TestCase):
+    def test_prompt_variants_binding_roundtrip_and_validation(self):
+        storage=load("group_runner_variants_storage_test",ROOT/"storage.py")
+        config={"version":4,"workflow":{"identity":"path:styles.json","name":"styles"},"rows":[{"id":"a"*32,"group":{"id":1},"count":1,"prompts":[{"text_node_id":"1","prompt":"北欧","variants":["北欧","","中古","现代"]}]}]}
+        with tempfile.TemporaryDirectory() as directory:
+            store=storage.BindingStore(directory);store.write("b"*32,config);self.assertEqual(store.read()["b"*32]["rows"],config["rows"])
+        for variants in [[],"text",[None],["x"*50001],[""]*1001]:
+            broken=json.loads(json.dumps(config));broken["rows"][0]["prompts"][0]["variants"]=variants
+            with self.assertRaises(ValueError):storage.validate_config(broken)
+
     def test_text_and_runtime_target_preserve_values(self):
         nodes=load("group_runner_nodes_test",ROOT/"nodes.py")
         self.assertEqual(nodes.GroupRunnerText().text("中文\nexact prompt"),("中文\nexact prompt",))

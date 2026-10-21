@@ -5,9 +5,12 @@ export const graphGroups = graph => graph?._groups || graph?.groups || [];
 export function members(graph, group) {
     group.recomputeInsideNodes?.();
     const nodes = group.nodes || group._nodes;
-    if (nodes && typeof nodes[Symbol.iterator] === "function") return [...nodes].map(node => typeof node === "object" ? node : graph.getNodeById(node)).filter(Boolean);
+    if (nodes && typeof nodes[Symbol.iterator] === "function") {
+        const listed=[...nodes].map(node => typeof node === "object" ? (graph.getNodeById ? graph.getNodeById(node.id) : node) : graph.getNodeById(node)).filter(Boolean);
+        if(listed.length)return listed;
+    }
     const [x,y,w,h] = group._bounding || [...group.pos, ...group.size];
-    return graphNodes(graph).filter(node => node.pos[0] < x+w && node.pos[1] < y+h && node.pos[0]+node.size[0] > x && node.pos[1]+node.size[1] > y);
+    return graphNodes(graph).filter(node => node.pos?.length>=2 && node.size?.length>=2 && node.pos[0] < x+w && node.pos[1] < y+h && node.pos[0]+node.size[0] > x && node.pos[1]+node.size[1] > y);
 }
 export function groupRef(graph, group) {
     return { id: group.id ?? null, title: group.title || "未命名分组", members: members(graph,group).map(node=>String(node.id)).sort(), rect: [...(group._bounding || [...group.pos,...group.size])] };
@@ -25,12 +28,24 @@ export function textNodes(graph, group) { return members(graph,group).filter(nod
 export function rowPrompts(row) {
     return Array.isArray(row.prompts) ? row.prompts : row.text_node_id == null ? [] : [{text_node_id:String(row.text_node_id),prompt:row.prompt||""}];
 }
+export function promptDrafts(entry) { return Array.isArray(entry?.variants) ? entry.variants : [entry?.prompt || ""]; }
+export function promptValues(entry) { return promptDrafts(entry).filter(value => typeof value === "string" && value.trim()); }
+export function rowVariantCount(row) { return Math.max(1,...rowPrompts(row).map(entry => promptValues(entry).length)); }
+export function variantRow(row, index) {
+    return {...row, prompts:rowPrompts(row).map(entry=>{
+        const values=promptValues(entry);
+        return {text_node_id:entry.text_node_id,prompt:values[Math.min(index,values.length-1)] || ""};
+    })};
+}
 export function syncPrompts(row, nodes) {
     // Keep each node's own draft when nodes are added, removed, or reordered.
     // Legacy single-text bindings migrate without losing their saved prompt.
     const available=new Map(nodes.map(node=>[String(node.id),node])),seen=new Set();
-    const prompts=rowPrompts(row).filter(entry=>available.has(String(entry.text_node_id))&&!seen.has(String(entry.text_node_id))&&seen.add(String(entry.text_node_id))).map(entry=>({text_node_id:String(entry.text_node_id),prompt:entry.prompt}));
-    for(const [id,node]of available)if(!seen.has(id))prompts.push({text_node_id:id,prompt:String(node.widgets?.find(widget=>widget.name==="text")?.value??"")});
+    const prompts=rowPrompts(row).filter(entry=>available.has(String(entry.text_node_id))&&!seen.has(String(entry.text_node_id))&&seen.add(String(entry.text_node_id))).map(entry=>({...entry,text_node_id:String(entry.text_node_id)}));
+    for(const [id,node]of available)if(!seen.has(id)){
+        const variants=node.properties?.group_runner_prompts;
+        prompts.push({text_node_id:id,prompt:String(node.widgets?.find(widget=>widget.name==="text")?.value??""),...(Array.isArray(variants)&&variants.length>1?{variants:[...variants]}:{})});
+    }
     row.prompts=prompts;
     delete row.text_node_id;delete row.prompt;
     return prompts;

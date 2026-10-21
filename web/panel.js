@@ -1,4 +1,5 @@
-import {blankRow,uid,workflowInfo,graphGroups,groupRef,resolveGroup,textNodes,members,syncPrompts} from "./model.js";
+import {blankRow,uid,workflowInfo,graphGroups,groupRef,resolveGroup,textNodes,members,syncPrompts,promptDrafts,promptValues} from "./model.js";
+import {syncTextNode} from "./text_variants.js";
 import {GroupQueue} from "./runner.js";
 import {centerGroup} from "./navigation.js";
 import {exportNodes,exportState,eagleConfig,connectionKey,sameConnection,syncExportNodes} from "./eagle.js";
@@ -27,6 +28,11 @@ export class GroupPanel {
         for(const type of ["pointerdown","keydown","wheel"])this.root.addEventListener(type,event=>event.stopPropagation());
         this.count.addEventListener("change",()=>{if(!this.ensureCurrent())return;const size=Math.max(1,Math.min(64,Math.round(Number(this.count.value)||1)));while(this.rows.length<size)this.rows.push(blankRow());this.rows=this.rows.slice(0,size);this.dirty=true;this.render();});
         this.runner=new GroupQueue({app,api,request:(path,body)=>this.request(path,"POST",body),onChange:()=>this.updateJobs(),isActive:()=>!this.prefs.minimized&&!this.destroyed});
+        this.onNodeText=event=>{
+            const {node,values}=event.detail||{};if(!node||this.graph?.getNodeById(node.id)!==node)return;
+            for(const row of this.rows)for(const entry of row.prompts||[])if(String(entry.text_node_id)===String(node.id)){entry.variants=[...values];entry.prompt=values.find(value=>value.trim())||"";this.dirty=true;this.runner.updateDraft(row);}
+            this.render();
+        };addEventListener("group-runner-text-drafts",this.onNodeText);
         this.drag();this.dragPill();this.onResize=()=>{this.layout();this.layoutPill();this.fitPrompts();};addEventListener("resize",this.onResize);this.layout();this.setView();
         this.ready=this.initialize();this.timer=setInterval(()=>{if(!this.prefs.minimized&&!this.initializing)this.syncWorkflow();},450);
     }
@@ -58,7 +64,7 @@ export class GroupPanel {
     async save(){
         if(this.saving||!this.ensureCurrent())return;const info=this.info(),key=this.key;this.saving=true;this.updateJobs();
         try{
-            const id=this.bindingId||uid();const payload={version:3,workflow:{identity:info.identity,name:info.name},rows:this.rows};
+            const id=this.bindingId||uid();const payload={version:4,workflow:{identity:info.identity,name:info.name},rows:this.rows};
             const value=await this.request("/bindings/"+id,"PUT",payload);this.bindings[id]=value.binding;
             if(this.key!==key||this.info().identity!==info.identity)throw new Error("配置已保存，但工作流已切换，未修改当前工作流。");
             info.graph.extra||={};info.graph.extra.group_runner_binding=id;info.graph.change?.();this.bindingId=id;this.dirty=false;
@@ -122,9 +128,15 @@ export class GroupPanel {
                     select.addEventListener("change",()=>{if(!this.ensureCurrent())return;const other=entries.findIndex(candidate=>candidate.text_node_id===select.value);if(other<0)return;[entries[promptIndex],entries[other]]=[entries[other],entries[promptIndex]];this.dirty=true;this.render();});
                     promptLine.append(select);
                 }else{const label=el("span","gr-text-name",name);label.title=name;promptLine.append(label);}
-                const prompt=el("textarea");prompt.ariaLabel=promptIndex===0?`第 ${index+1} 行提示词`:`第 ${index+1} 行第 ${promptIndex+1} 个提示词`;prompt.placeholder=node?"在这里填写提示词":"组内添加「框运行 · 通用文本」即可输入";prompt.value=entry?.prompt||"";prompt.maxLength=50000;prompt.rows=1;prompt.disabled=!node;
-                prompt.addEventListener("input",()=>{if(!this.ensureCurrent()||!entry)return;entry.prompt=prompt.value;this.fitPrompt(prompt);this.dirty=true;const widget=node?.widgets?.find(widget=>widget.name==="text");if(widget){widget.value=entry.prompt;if(widget.inputEl)widget.inputEl.value=entry.prompt;this.graph.change?.();node.setDirtyCanvas?.(true,true);}});
-                promptLine.append(prompt);promptCell.append(promptLine);prompts.push({prompt,select,hasText:!!node});
+                if(entry){entry.prompt=promptValues(entry)[0]||"";syncTextNode(node,promptValues(entry));}
+                const prompt=el("textarea");prompt.ariaLabel=promptIndex===0?`第 ${index+1} 行提示词`:`第 ${index+1} 行第 ${promptIndex+1} 个提示词`;prompt.placeholder=node?"填写提示词；双击编辑批量提示词":"组内添加「框运行 · 通用文本」即可输入";prompt.value=entry?.prompt||"";prompt.maxLength=50000;prompt.rows=1;prompt.disabled=!node;prompt.title="双击设置多个提示词，按顺序批量运行";
+                const multiplier=button(`编辑第 ${index+1} 行第 ${promptIndex+1} 个文本的批量提示词`,entry?`×${promptValues(entry).length}`:"×0",()=>{if(entry)this.editVariants(row,entry,node);},"gr-multiplier");multiplier.disabled=!node;
+                prompt.addEventListener("dblclick",()=>{if(entry)this.editVariants(row,entry,node);});
+                prompt.addEventListener("input",()=>{if(!this.ensureCurrent()||!entry)return;
+                    if(Array.isArray(entry.variants)){const first=entry.variants.findIndex(value=>value.trim());entry.variants[first<0?0:first]=prompt.value;}
+                    entry.prompt=prompt.value;this.fitPrompt(prompt);this.dirty=true;syncTextNode(node,promptValues(entry));multiplier.textContent=`×${promptValues(entry).length}`;this.runner.updateDraft(row);this.graph.change?.();
+                });
+                const field=el("div","gr-prompt-field");field.append(prompt,multiplier);promptLine.append(field);promptCell.append(promptLine);prompts.push({prompt,select,hasText:!!node});
             }
             const count=el("input","gr-batch");count.type="number";count.min=1;count.max=1000;count.value=row.count;count.ariaLabel=`第 ${index+1} 行运行次数`;count.addEventListener("change",()=>{row.count=Math.max(1,Math.min(1000,Math.round(Number(count.value)||1)));count.value=row.count;this.dirty=true;});
             const run=button(`运行第 ${index+1} 行`,"运行",()=>this.start(row),"gr-run"),cancel=button(`取消第 ${index+1} 行`,"取消",()=>this.runner.cancel(row.id),"gr-cancel");
@@ -134,16 +146,28 @@ export class GroupPanel {
     updateJobs(){if(!this.runner)return;const busy=this.rows.some(row=>this.runner.jobFor(row.id));this.count.disabled=busy;this.saveButton.disabled=this.saving;this.deleteButton.disabled=!this.bindingId||busy||this.saving;this.runAll.disabled=this.prefs.minimized;
         this.runAll.textContent=this.runner.paused&&busy?"继续全部":"整体运行";
         for(const row of this.rows){const controls=this.elements.get(row.id);if(!controls)continue;const job=this.runner.jobFor(row.id),last=[...this.runner.jobs].reverse().find(job=>job.row.id===row.id);const blocked=!!job;
-            controls.groupButton.disabled=blocked;for(const {prompt,select,hasText}of controls.prompts){prompt.disabled=blocked||!hasText;if(select)select.disabled=blocked;}for(const {control,available,navigation}of controls.eagle)control.disabled=(!navigation&&blocked)||!available;controls.count.disabled=blocked;controls.cancel.disabled=!job;controls.run.disabled=blocked&&job.state!=="paused";controls.run.textContent=job?.state==="paused"?"继续":"运行";
-            controls.progress.textContent=last?`${last.message} · ${last.done} / ${last.row.count}`:"待命";controls.progress.dataset.state=last?.state||"idle";
+            controls.groupButton.disabled=blocked;for(const {prompt,select,hasText}of controls.prompts){prompt.disabled=!hasText;if(select)select.disabled=blocked;}for(const {control,available,navigation}of controls.eagle)control.disabled=(!navigation&&blocked)||!available;controls.count.disabled=blocked;controls.cancel.disabled=!job;controls.run.disabled=blocked&&job.state!=="paused";controls.run.textContent=job?.state==="paused"?"继续":"运行";
+            controls.progress.textContent=last?`${last.message} · ${last.done} / ${last.total??last.row.count}`:"待命";controls.progress.dataset.state=last?.state||"idle";
         }
     }
     start(row){try{if(!this.ensureCurrent())return;if(!this.runner.nodeDefs)throw new Error("尚未读取节点定义，请点击刷新。");this.runner.enqueue([row],this.info());}catch(error){this.notice(error.message,true);}}
     startAll(){try{if(!this.ensureCurrent())return;if(!this.runner.nodeDefs)throw new Error("尚未读取节点定义，请点击刷新。");this.runner.enqueue(this.rows,this.info());}catch(error){this.notice(error.message,true);}}
+    editVariants(row,entry,node){
+        if(!this.ensureCurrent()||!node)return;
+        const context=this.key,graph=this.graph,{body}=this.modal("批量提示词 · "+(node.title||"通用文本"),"关闭批量提示词");
+        entry.variants=[...promptDrafts(entry)];if(!entry.variants.length)entry.variants=[""];
+        const toolbar=el("div","gr-variant-toolbar"),label=el("label","","文本框数量 "),count=el("input");count.type="number";count.min=1;count.max=1000;count.value=entry.variants.length;count.ariaLabel="批量提示词文本框数量";label.append(count);
+        const summary=el("div","gr-note"),list=el("div","gr-variant-list");
+        const save=()=>{if(this.key!==context||this.graph!==graph)return;entry.prompt=promptValues(entry)[0]||"";this.dirty=true;syncTextNode(node,promptValues(entry));this.runner.updateDraft(row);graph.change?.();summary.textContent=`已填写 ${promptValues(entry).length} 条 · 每条运行 ${row.count} 次。空白框不计入批量；多节点按序配对，较短列表沿用最后一条。`;};
+        const draw=()=>{count.value=entry.variants.length;list.replaceChildren();entry.variants.forEach((value,index)=>{const item=el("label","gr-variant-item");item.append(el("span","",`提示词 ${index+1}`));const field=el("textarea");field.rows=3;field.maxLength=50000;field.ariaLabel=`批量提示词 ${index+1}`;field.value=value;field.placeholder="填写一种风格的完整提示词（空白不运行）";field.addEventListener("input",()=>{if(!this.ensureCurrent())return;entry.variants[index]=field.value;save();});item.append(field);list.append(item);});save();};
+        count.addEventListener("change",()=>{if(!this.ensureCurrent())return;const size=Math.max(1,Math.min(1000,Math.round(Number(count.value)||1)));while(entry.variants.length<size)entry.variants.push("");entry.variants.length=size;draw();});
+        toolbar.append(label,button("添加提示词文本框","＋ 添加文本框",()=>{if(entry.variants.length>=1000)return;entry.variants.push("");draw();list.lastElementChild?.querySelector("textarea")?.focus();}));
+        body.append(toolbar,summary,list);this.onModalClose=()=>{if(this.key===context&&this.graph===graph){save();this.render();}};draw();list.querySelector("textarea")?.focus();
+    }
     jumpToGroup(row){try{if(!this.ensureCurrent())return;const group=resolveGroup(this.graph,row.group);if(!group){this.render();throw new Error("分组已移除，请重新选择。");}const canvas=this.app.canvas;if(canvas?.graph&&canvas.graph!==this.graph)throw new Error("请先返回当前工作流的主画布，再定位分组。");centerGroup(canvas,group);this.notice(`已定位分组：${group.title||"未命名分组"}`);}catch(error){this.notice(error.message,true);}}
     chooseGroup(row){if(!this.ensureCurrent()||this.runner.jobFor(row.id))return;const groups=[...graphGroups(this.graph)];const {body}=this.modal("选择工作流分组");const search=el("input");search.placeholder="搜索分组名称";search.ariaLabel="搜索分组";const list=el("div","gr-group-list");const draw=()=>{list.replaceChildren();for(const [index,group]of groups.entries()){if(!String(group.title||"").toLowerCase().includes(search.value.toLowerCase()))continue;const choose=button(`选择分组 ${index+1} ${group.title}`,`${group.title||"未命名分组"} · ${members(this.graph,group).length} 个节点`,()=>{if(!this.ensureCurrent())return;row.group=groupRef(this.graph,group);row.prompts=[];delete row.text_node_id;delete row.prompt;delete row.eagle;this.dirty=true;this.closeModal();this.render();},"gr-group-option");choose.style.borderLeftColor=group.color||"#597d9a";list.append(choose);}if(!list.children.length)list.append(el("div","gr-note","没有匹配的分组，请先在画布中用 Ctrl + G 创建分组。"));};search.addEventListener("input",draw);body.append(search,list);draw();search.focus();}
-    modal(title){this.closeModal();const cover=el("div","gr-cover"),dialog=el("section","gr-dialog");dialog.setAttribute("role","dialog");dialog.ariaLabel=title;dialog.setAttribute("aria-modal","true");const header=el("header");header.append(el("strong","",title),button("关闭选择分组","×",()=>this.closeModal()));const body=el("div","gr-dialog-body");dialog.append(header,body);cover.append(dialog);this.root.append(cover);this.modalCover=cover;cover.addEventListener("click",event=>{if(event.target===cover)this.closeModal();});cover.addEventListener("keydown",event=>{if(event.key==="Escape")this.closeModal();});return{body};}
-    closeModal(){this.modalCover?.remove();this.modalCover=null;}
+    modal(title,closeLabel="关闭选择分组"){this.closeModal();const cover=el("div","gr-cover"),dialog=el("section","gr-dialog");dialog.setAttribute("role","dialog");dialog.ariaLabel=title;dialog.setAttribute("aria-modal","true");const header=el("header");header.append(el("strong","",title),button(closeLabel,"×",()=>this.closeModal()));const body=el("div","gr-dialog-body");dialog.append(header,body);cover.append(dialog);this.root.append(cover);this.modalCover=cover;cover.addEventListener("click",event=>{if(event.target===cover)this.closeModal();});cover.addEventListener("keydown",event=>{if(event.key==="Escape")this.closeModal();});return{body};}
+    closeModal(){const closed=this.onModalClose;this.onModalClose=null;this.modalCover?.remove();this.modalCover=null;closed?.();}
     setView(){this.panel.hidden=!!this.prefs.minimized;this.pill.hidden=!this.prefs.minimized;if(this.prefs.minimized)this.layoutPill();}
     layoutPill(){const width=this.pill.offsetWidth||70,height=this.pill.offsetHeight||30;const x=Number.isFinite(this.prefs.pillX)?this.prefs.pillX:22,y=Number.isFinite(this.prefs.pillY)?this.prefs.pillY:innerHeight-height-22;this.prefs.pillX=Math.max(4,Math.min(x,innerWidth-width-4));this.prefs.pillY=Math.max(4,Math.min(y,innerHeight-height-4));Object.assign(this.pill.style,{left:this.prefs.pillX+"px",top:this.prefs.pillY+"px",bottom:"auto"});}
     dragPill(){this.pill.addEventListener("pointerdown",event=>{if(event.button!==0)return;this.pillDragged=false;const start={x:event.clientX,y:event.clientY,left:this.prefs.pillX,top:this.prefs.pillY};this.pill.setPointerCapture(event.pointerId);const move=current=>{if(Math.hypot(current.clientX-start.x,current.clientY-start.y)>4)this.pillDragged=true;if(!this.pillDragged)return;this.prefs.pillX=start.left+current.clientX-start.x;this.prefs.pillY=start.top+current.clientY-start.y;this.layoutPill();};const end=()=>{this.pill.removeEventListener("pointermove",move);this.pill.removeEventListener("pointerup",end);this.pill.removeEventListener("pointercancel",end);this.savePrefs();};this.pill.addEventListener("pointermove",move);this.pill.addEventListener("pointerup",end);this.pill.addEventListener("pointercancel",end);});}
@@ -151,6 +175,6 @@ export class GroupPanel {
     restore(){this.prefs.minimized=false;this.savePrefs();this.setView();this.syncWorkflow();this.render();this.notice("已恢复 · 暂停的批次需点击继续");}
     layout(){const width=Math.max(320,Math.min(1200,innerWidth-24));this.prefs.x=Math.max(8,Math.min(Number(this.prefs.x)||8,innerWidth-width-8));this.prefs.y=Math.max(8,Math.min(Number(this.prefs.y)||8,innerHeight-80));Object.assign(this.panel.style,{width:width+"px",left:this.prefs.x+"px",top:this.prefs.y+"px",maxHeight:Math.max(100,innerHeight-this.prefs.y-10)+"px"});}
     drag(){this.header.addEventListener("pointerdown",event=>{if(event.button!==0||event.target.closest("button,input,label"))return;event.preventDefault();const start={x:event.clientX,y:event.clientY,left:this.prefs.x,top:this.prefs.y};this.header.setPointerCapture(event.pointerId);const move=current=>{this.prefs.x=start.left+current.clientX-start.x;this.prefs.y=start.top+current.clientY-start.y;this.layout();};const end=()=>{this.header.removeEventListener("pointermove",move);this.header.removeEventListener("pointerup",end);this.header.removeEventListener("pointercancel",end);this.savePrefs();};this.header.addEventListener("pointermove",move);this.header.addEventListener("pointerup",end);this.header.addEventListener("pointercancel",end);});}
-    destroy(){this.destroyed=true;this.runner.pause("面板已关闭");clearInterval(this.timer);removeEventListener("resize",this.onResize);this.closeModal();this.root.remove();}
+    destroy(){this.destroyed=true;this.runner.pause("面板已关闭");clearInterval(this.timer);removeEventListener("resize",this.onResize);removeEventListener("group-runner-text-drafts",this.onNodeText);this.closeModal();this.root.remove();}
 }
 
