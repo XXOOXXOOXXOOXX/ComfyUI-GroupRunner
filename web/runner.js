@@ -16,10 +16,17 @@ export class GroupQueue {
         }
         for(const row of selected)this.jobs.push({id:uid(),row:structuredClone(row),sourceRow:row,total:row.count*rowVariantCount(row),graph:info.graph,identity:info.identity,state:"queued",done:0,message:"等待执行",cancelled:false});
         const wanted=new Map(rows.map(row=>[row.id,row]));for(const job of this.jobs)if(wanted.has(job.row.id)&&job.identity===info.identity){job.sourceRow=wanted.get(job.row.id);job.suspended=false;if(job.state==="paused"){job.state="queued";job.message="等待继续";}}
-        this.paused=false;
+        this.reorderRows(rows,info);this.paused=false;
         this.onChange(); this.pump();
     }
     updateDraft(row){const job=this.jobFor(row.id);if(job){job.sourceRow=row;job.total=job.row.count*rowVariantCount(row);this.onChange();}}
+    reorderRows(rows,info){
+        // Only reorder pending jobs from this workflow. The current row keeps
+        // its remaining batches; submitted prompts and other clients are untouched.
+        const rank=new Map(rows.map((row,index)=>[row.id,index])),slots=[];
+        this.jobs.forEach((job,index)=>{if(job!==this.current&&job.graph===info.graph&&job.identity===info.identity&&rank.has(job.row.id)&&["queued","paused"].includes(job.state))slots.push(index);});
+        const ordered=slots.map(index=>this.jobs[index]).sort((a,b)=>rank.get(a.row.id)-rank.get(b.row.id));slots.forEach((index,offset)=>this.jobs[index]=ordered[offset]);
+    }
     pause(message="已暂停后续批次") {
         this.paused=true;
         for(const job of this.jobs)if(["queued","running","submitting"].includes(job.state)){job.suspended=true;if(job.state==="queued"){job.state="paused";job.message=message;}}

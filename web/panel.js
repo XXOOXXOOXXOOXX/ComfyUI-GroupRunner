@@ -111,12 +111,42 @@ export class GroupPanel {
         if(connected&&shared)queueMicrotask(load);
         return{root,inputs};
     }
-    render(){this.count.value=this.rows.length;this.list.replaceChildren();this.elements.clear();this.updateHeading();
+    reorderRows(ids){
+        if(!this.ensureCurrent()||ids.length!==this.rows.length||new Set(ids).size!==ids.length)return;
+        const rows=new Map(this.rows.map(row=>[row.id,row]));if(ids.some(id=>!rows.has(id))||ids.every((id,index)=>id===this.rows[index].id))return;
+        this.rows=ids.map(id=>rows.get(id));this.dirty=true;this.runner.reorderRows(this.rows,this.info());this.render();
+        this.notice("行顺序已调整 · 待运行的行按新顺序执行，当前行继续运行；点击保存可保留排序");
+    }
+    rowDrag(handle,line,row){
+        handle.addEventListener("keydown",event=>{
+            if(!["ArrowUp","ArrowDown"].includes(event.key))return;event.preventDefault();
+            const ids=this.rows.map(item=>item.id),from=ids.indexOf(row.id),to=from+(event.key==="ArrowUp"?-1:1);if(to<0||to>=ids.length)return;
+            [ids[from],ids[to]]=[ids[to],ids[from]];this.reorderRows(ids);this.elements.get(row.id)?.handle.focus({preventScroll:true});this.elements.get(row.id)?.line.scrollIntoView({block:"nearest"});
+        });
+        handle.addEventListener("pointerdown",event=>{
+            if(event.button!==0||!event.isPrimary||this.rows.length<2||!this.ensureCurrent())return;
+            this.cancelRowDrag?.();event.preventDefault();handle.focus({preventScroll:true});handle.setPointerCapture(event.pointerId);
+            const context=this.key,graph=this.graph,startY=event.clientY,startX=event.clientX;let y=startY,started=false,ids=null,frame;
+            const markers=()=>{for(const child of this.list.children)child.classList.remove("gr-drop-before","gr-drop-after");};
+            const target=()=>{
+                const others=[...this.list.children].filter(child=>child!==line),before=others.find(child=>{const rect=child.getBoundingClientRect();return y<rect.top+rect.height/2;});
+                ids=others.map(child=>child.dataset.rowId);ids.splice(before?others.indexOf(before):others.length,0,row.id);markers();
+                if(!ids.every((id,index)=>id===this.rows[index].id))(before||others.at(-1))?.classList.add(before?"gr-drop-before":"gr-drop-after");
+            };
+            const scroll=()=>{if(started){const rect=this.list.getBoundingClientRect(),edge=Math.min(36,rect.height/4),speed=y<rect.top+edge?-12:y>rect.bottom-edge?12:0;if(speed){this.list.scrollTop+=speed;target();}}frame=requestAnimationFrame(scroll);};
+            const move=current=>{if(current.pointerId!==event.pointerId)return;y=current.clientY;if(!started&&Math.hypot(current.clientX-startX,y-startY)>4){started=true;line.classList.add("gr-row-dragging");this.list.classList.add("gr-sorting");}if(started){current.preventDefault();target();}};
+            const cleanup=()=>{cancelAnimationFrame(frame);removeEventListener("pointermove",move,true);removeEventListener("pointerup",end,true);removeEventListener("pointercancel",cancel,true);removeEventListener("keydown",key,true);removeEventListener("blur",cancel);handle.removeEventListener("lostpointercapture",cancel);if(handle.hasPointerCapture(event.pointerId))handle.releasePointerCapture(event.pointerId);line.classList.remove("gr-row-dragging");this.list.classList.remove("gr-sorting");markers();this.cancelRowDrag=null;};
+            const cancel=()=>cleanup(),end=current=>{if(current.pointerId!==event.pointerId)return;const order=started?ids:null;cleanup();if(order&&this.key===context&&this.graph===graph){this.reorderRows(order);this.elements.get(row.id)?.handle.focus({preventScroll:true});}},key=current=>{if(current.key==="Escape"){current.preventDefault();current.stopPropagation();cancel();}};
+            this.cancelRowDrag=cancel;addEventListener("pointermove",move,{capture:true,passive:false});addEventListener("pointerup",end,true);addEventListener("pointercancel",cancel,true);addEventListener("keydown",key,true);addEventListener("blur",cancel);handle.addEventListener("lostpointercapture",cancel);frame=requestAnimationFrame(scroll);
+        });
+    }
+    render(){this.cancelRowDrag?.();this.count.value=this.rows.length;this.list.replaceChildren();this.elements.clear();this.updateHeading();
         for(const [index,row]of this.rows.entries()){
             const group=resolveGroup(this.graph,row.group);const line=el("article","gr-row");line.dataset.rowId=row.id;
             const groupButton=button(`第 ${index+1} 行选择分组`,group?.title||row.group?.title||"双击选择分组",()=>{},"gr-group");groupButton.title="双击选择当前工作流中的分组";groupButton.dataset.missing=String(!!row.group&&!group);
             groupButton.addEventListener("dblclick",()=>this.chooseGroup(row));groupButton.addEventListener("keydown",event=>{if(event.key==="Enter")this.chooseGroup(row);});
-            const groupCell=el("div","gr-group-cell");groupCell.append(groupButton);const nodeCount=el("small","gr-node-count",group?`${members(this.graph,group).length} 个节点`:row.group?"分组已移除":"未选择");
+            const handle=iconButton(`拖动第 ${index+1} 行排序`,["M8 5h1M15 5h1M8 12h1M15 12h1M8 19h1M15 19h1"],()=>{});handle.classList.add("gr-row-handle");handle.title="拖动调整行顺序；聚焦后按 ↑ / ↓ 也可排序";this.rowDrag(handle,line,row);
+            const groupCell=el("div","gr-group-cell");groupCell.append(handle,groupButton);const nodeCount=el("small","gr-node-count",group?`${members(this.graph,group).length} 个节点`:row.group?"分组已移除":"未选择");
             const eagle=this.eagleControls(row,group,index);
             const promptCell=el("div","gr-prompt-stack"),nodes=group?textNodes(this.graph,group):[],entries=group?syncPrompts(row,nodes):[],prompts=[];
             for(const [promptIndex,entry]of (entries.length?entries:[null]).entries()){
@@ -140,7 +170,7 @@ export class GroupPanel {
             }
             const count=el("input","gr-batch");count.type="number";count.min=1;count.max=1000;count.value=row.count;count.ariaLabel=`第 ${index+1} 行运行次数`;count.addEventListener("change",()=>{row.count=Math.max(1,Math.min(1000,Math.round(Number(count.value)||1)));count.value=row.count;this.dirty=true;});
             const run=button(`运行第 ${index+1} 行`,"运行",()=>this.start(row),"gr-run"),cancel=button(`取消第 ${index+1} 行`,"取消",()=>this.runner.cancel(row.id),"gr-cancel");
-            const progress=el("div","gr-progress","待命");progress.setAttribute("role","status");const main=el("div","gr-row-main");main.append(groupCell,eagle.root,nodeCount,count,run,cancel);line.append(main,promptCell,progress);this.list.append(line);this.elements.set(row.id,{line,groupButton,prompts,eagle:eagle.inputs,count,run,cancel,progress});
+            const progress=el("div","gr-progress","待命");progress.setAttribute("role","status");const main=el("div","gr-row-main");main.append(groupCell,eagle.root,nodeCount,count,run,cancel);line.append(main,promptCell,progress);this.list.append(line);this.elements.set(row.id,{line,handle,groupButton,prompts,eagle:eagle.inputs,count,run,cancel,progress});
         }this.structureSignature=this.structure();this.updateJobs();this.layout();this.fitPrompts();
     }
     updateJobs(){if(!this.runner)return;const busy=this.rows.some(row=>this.runner.jobFor(row.id));this.count.disabled=busy;this.saveButton.disabled=this.saving;this.deleteButton.disabled=!this.bindingId||busy||this.saving;this.runAll.disabled=this.prefs.minimized;
@@ -171,10 +201,10 @@ export class GroupPanel {
     setView(){this.panel.hidden=!!this.prefs.minimized;this.pill.hidden=!this.prefs.minimized;if(this.prefs.minimized)this.layoutPill();}
     layoutPill(){const width=this.pill.offsetWidth||70,height=this.pill.offsetHeight||30;const x=Number.isFinite(this.prefs.pillX)?this.prefs.pillX:22,y=Number.isFinite(this.prefs.pillY)?this.prefs.pillY:innerHeight-height-22;this.prefs.pillX=Math.max(4,Math.min(x,innerWidth-width-4));this.prefs.pillY=Math.max(4,Math.min(y,innerHeight-height-4));Object.assign(this.pill.style,{left:this.prefs.pillX+"px",top:this.prefs.pillY+"px",bottom:"auto"});}
     dragPill(){this.pill.addEventListener("pointerdown",event=>{if(event.button!==0)return;this.pillDragged=false;const start={x:event.clientX,y:event.clientY,left:this.prefs.pillX,top:this.prefs.pillY};this.pill.setPointerCapture(event.pointerId);const move=current=>{if(Math.hypot(current.clientX-start.x,current.clientY-start.y)>4)this.pillDragged=true;if(!this.pillDragged)return;this.prefs.pillX=start.left+current.clientX-start.x;this.prefs.pillY=start.top+current.clientY-start.y;this.layoutPill();};const end=()=>{this.pill.removeEventListener("pointermove",move);this.pill.removeEventListener("pointerup",end);this.pill.removeEventListener("pointercancel",end);this.savePrefs();};this.pill.addEventListener("pointermove",move);this.pill.addEventListener("pointerup",end);this.pill.addEventListener("pointercancel",end);});}
-    minimize(){this.runner.pause("浮窗已最小化，等待手动继续");this.prefs.minimized=true;this.closeModal();this.savePrefs();this.setView();}
+    minimize(){this.cancelRowDrag?.();this.runner.pause("浮窗已最小化，等待手动继续");this.prefs.minimized=true;this.closeModal();this.savePrefs();this.setView();}
     restore(){this.prefs.minimized=false;this.savePrefs();this.setView();this.syncWorkflow();this.render();this.notice("已恢复 · 暂停的批次需点击继续");}
     layout(){const width=Math.max(320,Math.min(1200,innerWidth-24));this.prefs.x=Math.max(8,Math.min(Number(this.prefs.x)||8,innerWidth-width-8));this.prefs.y=Math.max(8,Math.min(Number(this.prefs.y)||8,innerHeight-80));Object.assign(this.panel.style,{width:width+"px",left:this.prefs.x+"px",top:this.prefs.y+"px",maxHeight:Math.max(100,innerHeight-this.prefs.y-10)+"px"});}
     drag(){this.header.addEventListener("pointerdown",event=>{if(event.button!==0||event.target.closest("button,input,label"))return;event.preventDefault();const start={x:event.clientX,y:event.clientY,left:this.prefs.x,top:this.prefs.y};this.header.setPointerCapture(event.pointerId);const move=current=>{this.prefs.x=start.left+current.clientX-start.x;this.prefs.y=start.top+current.clientY-start.y;this.layout();};const end=()=>{this.header.removeEventListener("pointermove",move);this.header.removeEventListener("pointerup",end);this.header.removeEventListener("pointercancel",end);this.savePrefs();};this.header.addEventListener("pointermove",move);this.header.addEventListener("pointerup",end);this.header.addEventListener("pointercancel",end);});}
-    destroy(){this.destroyed=true;this.runner.pause("面板已关闭");clearInterval(this.timer);removeEventListener("resize",this.onResize);removeEventListener("group-runner-text-drafts",this.onNodeText);this.closeModal();this.root.remove();}
+    destroy(){this.cancelRowDrag?.();this.destroyed=true;this.runner.pause("面板已关闭");clearInterval(this.timer);removeEventListener("resize",this.onResize);removeEventListener("group-runner-text-drafts",this.onNodeText);this.closeModal();this.root.remove();}
 }
 
